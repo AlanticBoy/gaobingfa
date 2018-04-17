@@ -1,0 +1,449 @@
+9.	假设如果有一个线程想去写共享资源，那么就不能再有其他的线程对共享资源进行读和写。也就是说读和读能共存，读和写不能共存，写和写不能共存。
+
+用读写锁设计一个缓存系统:
+public class ReadWriteLockDemo {
+    /*缓存的Map*/
+    private Map<String, Object> map = new HashMap<>();
+    /*读写锁对象*/
+    private ReadWriteLock lock = new ReentrantReadWriteLock();
+
+    /*从缓存获取数据*/
+    public Object getData(String key) {
+        lock.readLock().lock();/*加上读锁，对写的线程互斥*/
+        Object value = null;
+
+        try {
+            value = map.get(key);/*尝试从缓存获取数据*/
+            if (value == null) {
+                /*如果发现目标值为null，释放掉读锁，同时上写锁*/
+                lock.readLock().unlock();
+                lock.writeLock().lock();
+                try {
+                    /*这步经过深入考虑，再次获取目标值*/
+                    value = map.get(key);
+                    if (value == null) {
+                       /*如果目标值仍然为空，从数据库读取数据*/
+                        value = new Random().nextInt(10000) + "test";
+                        map.put(key, value);
+                        System.out.println("db completed!");
+                    }
+                    lock.readLock().lock();//再次对读进行锁住，以防止写的操作，造成数据错乱
+                } finally {
+                  /*
+                         * 先加读锁再释放写锁读作用：
+                         * 防止在hong se hang 出多个线程获得写锁进行写的操作，所以在写锁还没有释放前要上读锁
+                         */
+                    lock.writeLock().unlock();
+         }
+            }
+        } finally {
+            lock.readLock().unlock();
+        }
+        return value;
+    }
+}
+10.	Condition的介绍
+锁能实现互斥但不能实现通信，condition的出现是为了解决这个问题。Condition基于锁上。
+因为wait()、notify()是和synchronized配合使用的，因此如果使用了显示锁Lock，就不能用了。所以显示锁要提供自己的等待/通知机制，Condition应运而生。
+优点：condition能实现多个方法A，B，C之间的通信
+Little demo：
+static class Bussiness {
+    private Lock lock = new ReentrantLock();
+    private Condition notifyofMain = lock.newCondition();//main通知second
+    private Condition notifyofSecond = lock.newCondition();//second通知third
+    private Condition notifyofThird = lock.newCondition();//third通知first
+    private int status = 1;//当前正在执行任务标志
+
+    /*下面只介绍两个方法工作原理*/
+    public void main() {
+        /*上锁，防止其它线程进来*/
+        lock.lock();
+        while (status != 1) {
+            try {
+                /*如果当前status不是1，那么老大就得等*/
+                notifyofMain.await();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        try {
+            for (int i = 0; i < 5; i++) {
+                System.out.println(" main is dealing loop of  " + i);
+            }
+            /*老大执行任务后，老二执行，status置为2*/
+            status = 2;
+            /*通知老二执行*/
+            notifyofSecond.signal();
+        } finally {
+            /*释放锁*/
+            lock.unlock();
+        }
+    }
+
+    public void second() {
+        /*上锁，防止其它线程进来*/
+        lock.lock();
+        while (status != 2) {
+            try {
+                /*当前status不是2的话，老二就等*/
+                notifyofSecond.await();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        try {
+            for (int i = 0; i < 3; i++) {
+                System.out.println(" second is dealing loop of  " + i);
+            }
+            /*老二执行任务完，老三执行，status置为3*/
+            status = 3;
+            /*通知老三执行*/
+            notifyofThird.signal();
+        } finally {
+            /*释放锁*/
+            lock.unlock();
+        }
+    }
+
+    public void third() {
+        lock.lock();
+        while (status != 3) {
+            try {
+                notifyofThird.await();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        try {
+            for (int i = 0; i < 2; i++) {
+                System.out.println(" third is dealing loop of  " + i);
+            }
+            status = 1;
+            notifyofMain.signal();
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+Condition应用举例：
+可以设计一个阻塞队列，当队列满了，添加操作被阻塞，这时其它线程通过删除操作删除元素。当队列已空，删除操作被阻塞，这时其它线程通过添加操作添加元素。
+
+public class BoundedQueues<T> {
+    public List<T> q; //这个列表用来存队列的元素
+    private int maxSize; //队列的最大长度
+    private Lock lock = new ReentrantLock();
+
+    private Condition addConditoin = lock.newCondition();
+    private Condition removeConditoin = lock.newCondition();
+    public BoundedQueues(int size) {
+        q = new ArrayList<>(size);
+        maxSize = size;
+    }
+    public void add(T e) {
+        lock.lock();
+        try {
+            while (q.size() == maxSize) {
+                addConditoin.await();
+            }
+            q.add(e);
+            removeConditoin.signal(); //执行了添加操作后唤醒因队列空被阻塞的删除操作
+        } catch (InterruptedException e1) {
+            Thread.currentThread().interrupt();
+        } finally {
+            lock.unlock();
+        }
+    }
+    public T remove() {
+        lock.lock();
+        try {
+            while (q.size() == 0) {
+                removeConditoin.await();
+            }
+            T e = q.remove(0);
+            addConditoin.signal(); //执行删除操作后唤醒因队列满而被阻塞的添加操作
+            return e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+21.	Semaphore和CycliBarrier和CountDownLatch和Exchanger的用途：
+①Semaphore经常用于限制获取某种资源的线程的数量，比如说操场上有5个跑道，一个跑道一次只能有一个学生在上面跑步，一旦所有跑道在使用，那么后面的学生就需要等待，直到有一个学生不跑了。
+②CyclicBarrier，允许两个或多个线程在某个集合点同步，当一个线程到达集合点时，它将调用await()方法等待其他的线程。线程调用await()方法后，CyclicBarrier将阻塞这个线程并将它置入休眠状态等待其它线程的到来。等最后一个线程调用await()方法时，CyclicBarrier将唤醒所有等待的线程然后这些线程将继续执行。
+			
+③CountDownLatch:CountDownLatch可以理解为一个计数器在初始化时设置初始值，当一个线程需要等待某些操作先完成时，需要调用await()方法。这个方法让线程进入休眠状态直到等待的所有线程都执行完成。每调用一次countDown()方法内部计数器减1,直到计数器为0时唤醒。这个可以理解为特殊的CyclicBarrier。线程同步点比较特殊，为内部计数器值为0时开始。
+④Exchanger：当一个线程到达exchange调用点时，如果它的伙伴线程此前已经调用了此方法，那么它的伙伴会被调度唤醒并与之进行对象交换，然后各自返回。如果它的伙伴还没到达交换点，那么当前线程将会被挂起，直至伙伴线程到达——完成交换正常返回；或者当前线程被中断——抛出中断异常；又或者是等候超时——抛出超时异常。
+22．阻塞队列
+最常见的业务场景是生产者不断生产任务放进阻塞队列中，消费者不断从阻塞队列中获取任务。当阻塞队列中填满数据时，所有生产者端的线程自动阻塞，当阻塞队列中数据为空时，所有消费者端的线程自动阻塞。这些操作BlockingQueue包办了，不用程序员操心了。
+介绍二：考虑下要是自己设计阻塞队列会出现的问题
+阻塞队列要实现两个功能：使线程等待和唤醒线程。
+产生死锁：在某个时刻，队列为空或者为满，此时生产者未能存入数据或者还在存入数据到队列中, 这就会产生使得队列出错。如果此时, 消费者对队列在进行操作就会产生死锁...由于之前的生产者的操作使得队列出了问题并没有释放锁, 此时就会造成死锁
+
+也就是说使用阻塞队列我们不在需要考虑方法之间的同步问题和线程之间的通信问题
+class Bussine {
+    BlockingQueue<String> blockingQueue = new ArrayBlockingQueue<String>(3);
+
+    /*"{}表示只要使用构造方法就会执行，要是有多个对象创建，" +
+            "就会使用多次,而static{}表示类加载时就执行，并且只执行一次"
+            */ {
+        try {
+            blockingQueue.put("hello");
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void put(String str) {
+        try {
+            blockingQueue.put(str);
+            System.out.println(" now I will put statists " + str);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public String take() {
+        String sys = null;
+        try {
+            sys = blockingQueue.take();
+            System.out.println(" has taken the data  " + sys);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return sys;
+    }
+23，常见同步集合类。
+ConcurrentHashMap
+ConcurrentHashSet
+CopyOnArrayList
+CopyOnLinkedList
+
+尚学堂并发编程与ActiveMQ消息队列
+
+1.	同步和异步的区别：
+同步：A线程要请求某个资源，但是该资源被B线程占用，A线程只好等下去
+异步：A线程要请求某个资源，但是该资源被B线程占用，A线程可以继续访问
+2.	线程中的脏读
+为什么会出现脏读，是因为线程没有同步。解决方法：①在方法上加synchronized；②用Lock
+public class DirtyRead {
+    private String user = "liudan";
+    private String pwd = "123456";
+   private Lock lock=new ReentrantLock();
+    private  void setUserValue(String user, String pwd) {
+        lock.lock();
+        this.user = user;
+        try {
+            /*写的时间为2秒*/
+            Thread.sleep(2000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }finally {
+            this.pwd = pwd;
+            System.err.println("setValue 最终结果->：user = " + user + "\t" + "pwd = " + pwd);
+            lock.unlock();
+        }
+
+    }
+    private  void getUserValue() {
+         lock.lock();
+        try {
+            System.err.println("getUserValue 设置值：user = " + this.user + "\t" + "pwd = " + this.pwd);
+        } finally {
+            lock.unlock();
+        }
+    }
+    public  static  void main(String[] args) throws InterruptedException {
+        final DirtyRead dr = new DirtyRead();
+
+        Thread userThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                dr.setUserValue("testuser","111111");
+            }
+        });
+        userThread.start();
+        /*读的时间为1秒*/
+        /*若是不同步，执行顺序则读在先，写在后*/
+        Thread.sleep(1000);
+        dr.getUserValue();
+        System.out.println(" main thread execute first ");
+    }
+
+}
+
+3.mysql中的脏读
+脏读：指一个线程中的事务读取到了另外一个线程中未提交的数据。
+3.	Volatile关键字作用
+当多个线程对共享数据进行操作时，可以保证内存中的共享数据可见。
+private volatile boolean flag = false;相对于synchronized，volatile是不能代替synchronized的同步功能。所以voletile不具备互斥性，不能保证变量的原子性。
+Volatile的性能要比synchronized高。
+Volatile关键字虽然拥有多个线程之间的可见性，但是却不具备同步性(也就是原子性),可以算得是一个轻量级的synchronized，但性能比synchronized强很多，不会造成阻塞。
+开源框架netty底层代码大量使用volatile，可见其性能不错。
+4.wait()和notify()需要synchronized配合使用，Lock可以实现三者的功能。
+5.CountDownLatch是什么
+CountDownLatch这个类能使一个线程等待其它线程完成各自的工作在执行。
+
+假设有三个请求，则启动三个子线程，并实例化数值为3的CountDownLatch，每当子线程处理完后，CountDownLatch减一。主线程出于waiting状态，直到CountDownLatch减为0.主线程才开始执行。
+
+/**
+ * 使用countdownlatch的批次请求处理服务
+ * @param batchRequests 批次请求对象列表
+ * @return
+ */
+public List<DealResult> countDownDeal(List<DealRequest> batchRequests){
+
+  //定义线程安全的处理结果列表
+  List<DealResult> countDownResultList = Collections.synchronizedList(new ArrayList<DealResult>());
+
+  if(batchRequests != null){
+
+        //定义countdownlatch线程数，有多少个请求，我们就定义多少个
+        CountDownLatch runningThreadNum = new CountDownLatch(batchRequests.size());
+
+    for(DealRequest request : batchRequests){
+      //循环遍历请求，并实例化线程(构造函数传入CountDownLatch类型的runningThreadNum)，立刻启动
+      DealWorker dealWorker = new DealWorker(request, runningThreadNum, countDownResultList);
+      new Thread(dealWorker).start();
+    }
+
+        try {
+          //调用CountDownLatch的await方法则当前主线程会等待，直到CountDownLatch类型的runningThreadNum清0
+          //每个DealWorker处理完成会对runningThreadNum减1
+          //如果等待1分钟后当前主线程都等不到runningThreadNum清0，则认为超时，直接中断，抛出中断异常InterruptedException
+            runningThreadNum.await(1, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+          //此处简化处理，非正常中断应该抛出异常或返回错误结果
+            return null;
+        }
+  }
+  return countDownResultList;
+}
+
+/**
+ * 线程请求处理类
+ *
+ */
+private class DealWorker implements Runnable {
+
+      /** 正在运行的线程数 */
+      private CountDownLatch  runningThreadNum;
+
+      /**待处理请求*/
+      private DealRequest request;
+
+      /**待返回结果列表*/
+      private List<DealResult> countDownResultList;
+
+      /**
+       * 构造函数
+       * @param request 待处理请求
+       * @param runningThreadNum 正在运行的线程数
+       * @param countDownResultList 待返回结果列表
+       */
+      private  DealWorker(DealRequest request, CountDownLatch runningThreadNum, List<DealResult> countDownResultList) {
+        this.request = request;
+        this.runningThreadNum = runningThreadNum;
+        this.countDownResultList = countDownResultList;
+      }
+
+  @Override
+  public void run() {
+    try{
+      this.countDownResultList.add(process(this.request));
+    }finally{
+      //当前线程处理完成，runningThreadNum线程数减1，此操作必须在finally中完成，避免处理异常后造成runningThreadNum线程数无法清0
+      this.runningThreadNum.countDown();
+    }
+  }
+}
+6. ConcurrentHashMap和CopyOnWriteArrayList的概念
+ConcurrentHashMap的实现原理
+ConcurrentHashMap使用段（Segment）来表示这些不同的部分，每个段其实就是一个小的HashTable，他们都有自己的锁。总共16个段，只要多个修改发生在不同的段上，他们就可以并发进行。这也是多线程场景减小锁的粒度从而降低所竞争的一种方案。ConcurrentHashMap底层使用了大量的volatile关键字，目的是第一时间获取修改的内容且性能非常好。
+CopyOnWriteArrayList的原理
+像普通的List在多线程操作时，一个线程对List读，一个线程对List进行写时，回报java.util.ConcurrentModificationException错误。但是CopyOnWriteArrayList是线程安全的。
+7．缓冲的原理
+比如Java中的IO操作，如果是边读编写，速度会很慢，也伤硬盘。缓冲区是内存里的一块区域，把数据先写在这块区域，然后一次性写入硬盘。
+8.TimeUnit的使用,时间单位
+TimeUnit是java.util.concurrent包下面的一个类，提供了更好的可读性线程暂停操作，通常用来替换Thread.sleep()。
+Thread.sleep()方法是很多程序员熟知的方法，他潜在的问题是可读性不好，比如：
+Thread.sleep（2400000），而用TimeUnit可读性好，用来替换Thread.sleep（）
+TimeUnit.MINUTES.sleep(4);  // sleeping for 4 minutes
+所以TimeUnit有以下几个作用：
+①	用秒，分钟，小时级别来暂停线程
+TimeUnit.SECONDS.sleep(4);
+ TimeUnit.MINUTES.sleep(4);
+      TimeUnit.HOURS.sleep(1);
+       TimeUnit.DAYS.sleep(1);
+
+②	方便的把时间转换成不同单位，
+TimeUnit.SECONDS.toMillis(1) 1秒转换为毫秒数 
+TimeUnit.SECONDS.toMinutes(60) 60秒转换为分钟数 
+TimeUnit.SECONDS.sleep(5) 线程休眠5秒 
+TimeUnit.SECONDS.convert(1, TimeUnit.MINUTES) 1分钟转换为秒数 
+9.Future模式讲解
+如果我们没有使用Futrue模式，比如我们启动了三个线程。送外卖，烧水，买东西。
+分别对应的时间是10分钟，5分钟，1分钟。那么我们只能等外卖来了后，烧水，烧完水后去买东西，需要的时间为16分钟。
+Future模式类似于Ajax的异步请求过程，主线程可以做其他事情，耗时的事情可以让子线程去做。子线程完成后，将数据放在指定的地方，主线程需要的时候在去指定的地方拿数据。
+JDK对Future模式的实现：仅在计算完成时才能获取结果，如果计算尚未完成则阻塞get方法。一旦计算完成，就不能再重新开始或取消计算。
+Callable+Future实现执行结果
+public class CallableFutureDemo {
+    static class Task implements Callable<Integer> {
+        @Override
+        public Integer call() throws Exception {
+            TimeUnit.SECONDS.sleep(new Random().nextInt(6));
+            return new Random().nextInt(5000);
+        }
+    }
+
+    public static void main(String[] args) throws ExecutionException {
+        ExecutorService threadPool = Executors.newFixedThreadPool(3);
+        /*
+        用CompletionService的好处：CompletionService实现了生产者提交任务和消费者获取结果的解耦，生产者和消费者
+                都不用关心任务的完成顺序，它保证消费者一定是按照任务的完成先后顺序来获取结果*/
+        CompletionService<Integer> completionService = new ExecutorCompletionService<Integer>(threadPool);
+        for (int i = 0; i < 10; i++) {
+            completionService.submit(new Task());
+        }
+
+        for (int i = 0; i < 10; i++) {
+            try {
+                Future<Integer> future = completionService.take();
+                /*future.get()方法用来获取结果*/
+                System.out.println(" 得到结果   " + future.get());
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        threadPool.shutdown();
+    }
+}
+11.	Master和Worker模式
+导语：Master，Worker模式是常用的并行模式，它的核心思想是系统由两类进程协同工作：master进程和Worker进程。
+Master负责接受和分配任务，Worker负责处理子任务。当各个Worker子进程处理完成后，会将结果返回给Master，由Master做归纳总结。好处是把一个大的任务分解成许多小的任务，并行执行从而提高系统的吞吐量。
+
+注意：Future模式和Master和Worker模式都属于并行模式
+12.	ByteBuffer的作用：字节缓冲区，用于处理字节。比传统的字节数组的效率要高。
+//相当于申请了长度为20的字节数组
+ByteBuffer heapByteBuffer = ByteBuffer.allocate(20);
+13.	Disruptor初识
+ 并发框架Disruptor。 
+　　   无锁的生产者与消费者。 
+　　   正因为无锁，所以性能高
+Disruptor是LMAX下的一个高并发框架，可以多线程达到6百万订单。
+如果编写一个生产者与消费者的程序，该怎么做？
+大多数人会用队列作为生产者与消费者之间的缓冲，从而间接同步他们的速度。不过用队列会遇到的几个问题：①如果生产者生产速度过快，一定时间后队列会过度膨胀，占用内存空间。②像ArrayBlockingQueue，为了保证多线程访问的正确性，里面加了锁，因此慢了几个数量级。
+
+而Disruptor的设计打破了这种思维，一定要用不断增长的队列吗，队列一定要加锁码？答案都是否定的。
+Disruptor使用了独特的RingBuffer代替Queue，所谓的RingBuffer，其实是一个环形队列，它的长度大小为10。由于RingBuffer的大小是固定的，所以用数组来保存数据，因为定位查找的速度很快。
+②	随着不停地填充RingBuffer，序号会一直增长，直到绕过这个环。要找到数组中当前序号指向的元素，可以通过mod操作。
+array index=sequence mod array length
+以上面的ringbuffer为例（java的mod语法）：12 % 10 = 2。
+③	Disruptor下的几个术语
+RingBuffer，被看作Disruptor的最重要的组件，从3.0版本开始仅仅负责存储和更新数据
+Sequence，顺序递增的序号，管理通过其交换的数据。
+Sequencer，这是Disruptor真正的核心，实现了Sequencer接口的单生产者（SingleProducerSequencer）和多生产者（MultiProducerSequencer）均实现了所有并行算法。功能是在消费者和生产者之间进行准确快速的数据传递。
+SequenceBarrier，由Sequencer生成，它包含了是否有供消费者来消费的逻辑。
+很多时候我们可以直接使用RingBuffer，而不用Disruptor，复杂逻辑下使用Disruptor。
