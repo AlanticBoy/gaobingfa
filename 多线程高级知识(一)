@@ -1,0 +1,557 @@
+1.	Thread.currentThread(),得到当前线程对象
+2.	Timer类的使用：根据是否循环分为两类：
+//只执行一次
+public void schedule(TimerTask task, long delay);
+public void schedule(TimerTask task, Date time);
+一个是根据延迟时间，一个是根据具体时间
+//循环执行
+ public void schedule(TimerTask task, long delay, long period) ;
+public void schedule(TimerTask task, Date firstTime, long period) ;
+比Timer更高级的是quartz
+案例，启动后两秒爆炸，然后每隔2秒炸一次
+public class TimerDemo {
+    public static void main(String[] args) {
+        new Timer().schedule(new TimerTask() {
+            @Override
+            public void run() {
+                System.out.println(" bombing  ");
+            }
+        }, 2000, 2000);
+
+        while (true){
+            System.out.println(" current seconds  "+new Date().getSeconds());
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+3.	线程安全问题
+情况一：一个线程没有执行完毕，又开始执行另外一个线程。未执行完毕的线程造成差错。
+造成该现象的原因：没有加synchronized，因此线程不同步；加了synchronized还出现该问题，那说明方法监测的不是同一个对象。
+public class ThreadSafety {
+    public static void main(String[] args) {
+Outputor outputor = new Outputor();//必须是同一个对象，不同的对象没有意义
+        new Thread(new Runnable() {
+ @Override
+            public void run() {
+                while (true) {
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                 outputor.output("thanks for  ");
+                }
+            }
+        }).start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (true) {
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                  
+                    outputor.output("liu  de  hua");
+                }
+            }
+        }).start();
+    }
+
+    static class Outputor {
+        public void output(String str) {
+            int len = str.length();
+            for (int i = 0; i < len; i++) {
+                System.out.print(str.charAt(i));
+            }
+            System.out.println();
+        }
+    }
+}
+输出结果：
+liu for 
+ de  hua
+解决方案：原子性：当一个线程没有执行完，其他的线程不能进来。
+①用synchronized包裹住同一个对象，必须是通过一个对象。最直接的方法是用synchronized包裹住this,因为它们共用的一个对象。改变后的代码如下：
+synchronized (this) {
+    for (int i = 0; i < len; i++) {
+        System.out.print(str.charAt(i));
+    }
+    System.out.println();
+}
+这种方式是保护一小段代码，还有一种方式是保护整个方法
+②在方法上加synchronized
+public synchronized void outputStr(String str) {
+    int len = str.length();
+    for (int i = 0; i < len; i++) {
+        System.out.print(str.charAt(i));
+    }
+    System.out.println();
+}
+
+线程间的互斥：
+
+/*目标，主线程执行完，子线程执行，双方不通信*/
+public class ThreadNonConmunication {
+    public static void main(String[] args) {
+        Bussness bussness=new Bussness();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                    for (int i=1;i<=50;i++){
+                        bussness.sub(i);
+                    }
+                }
+        }).start();
+        for (int i=0;i<50;i++){
+            bussness.main(i);
+        }
+    }
+
+}
+class Bussness{
+    public synchronized void sub(int i){
+        for (int j=0;j<10;j++){
+            System.out.println(" sub thread curent loop j= "+j+" i= "+i);
+        }
+    }
+    public synchronized void main(int i){
+        for (int j=0;j<50;j++){
+            System.out.println(" main curent loop j= "+j+" i= "+i);
+        }
+    }
+}
+②线程间的通信：
+
+/*目标，子线程执行一部分，通知主线程。主线程执行一部分，通知子线程，双方通信*/
+
+public class ThreadComunicationDemo01 {
+    /*为什么不在用的方法里加synchronized，而放到线程资源类里？
+    这是因为，放到线程资源类可以解决线程安全问题，同时使用方便，
+    不然每个使用到的方法都得考虑加synchronized
+    */
+    public static void main(String[] args) {
+        Bussness2 bussness = new Bussness2();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (int i = 1; i <= 50; i++) {
+                    bussness.sub(i);
+                }
+            }
+        }).start();
+        for (int i = 0; i < 50; i++) {
+            bussness.main(i);
+        }
+    }
+
+}
+
+class Bussness2 {
+    private boolean isOK = true;
+
+    public synchronized void sub(int i) {
+        while (!isOK) {/*为什么这里使用while，而不是用IF？这是为了避免假唤醒，用while更显深度*/
+            try {
+                /*wait(),相当于睡眠中，在等待，需要被外界的notify()方法唤醒*/
+                this.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        for (int j = 0; j < 10; j++) {
+            System.out.println(" sub thread curent loop j= " + j + " i= " + i);
+        }
+        isOK = false;
+        this.notify();
+    }
+
+    public synchronized void main(int i) {
+        while (isOK) {
+            try {
+                this.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        for (int j = 0; j < 50; j++) {
+            System.out.println(" main curent loop j= " + j + " i= " + i);
+        }
+        isOK = true;
+        this.notify();
+    }
+}
+4.	线程范围内的共享变量
+创建多个线程，他们都访问一个变量，要求同一个变量设置的值只能被自身获取。因为这很有可能造成线程间变量获取错误。
+为什么会出现这种现象呢？
+因为前一个线程刚把值设置后，没来得及完成动作就被下个线程改变了。所以线程一旦读取不到自己设置的值，有可能会读取其它线程的值。
+
+解决方式：①用Map存储每个线程和线程对应值。
+public class ThreadSharedData {
+    */
+/*定义一个Map用于存储Thread对象和Thread对象对应的值*//*
+
+    private static Map<Thread, Integer> map = new HashMap<>();
+    public static void main(String[] args) {
+        for (int i = 0; i < 2; i++) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    int data=new Random().nextInt();
+                    map.put(Thread.currentThread(),data);
+                    new ThreadA().getData();
+                    new ThreadB().getData();
+                }
+            }).start();
+        }
+    }
+    static class ThreadA {
+        public void getData() {
+            int data = map.get(Thread.currentThread());
+            System.out.println("A from " + Thread.currentThread().getName()
+                    + " get data :" + data);
+        }
+    }
+    static class ThreadB {
+        public void getData() {
+            int data = map.get(Thread.currentThread());
+            System.out.println("B from " + Thread.currentThread().getName()
+                    + " get data :" + data);
+        }
+    }
+}
+*/
+②用ThreadLocal类实现
+public class ThreadSharedData {
+    /*定义ThreadLocal，ThreadLocal可以看作一个集合。
+    * ThreadLocal的缺点是，每次只能存一类值，如果存多类的话，需要定义多个ThreadLocal
+    * */
+    private static ThreadLocal<Integer> local = new ThreadLocal<>();
+
+    public static void main(String[] args) {
+        for (int i = 0; i < 2; i++) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    int data = new Random().nextInt();
+                    /*ThreadLocal存的时候与当前线程有关*/
+                    local.set(data);
+                    new ThreadA().getData();
+                    new ThreadB().getData();
+                }
+            }).start();
+        }
+    }
+    static class ThreadA {
+        public void getData() {
+            /*ThreadLocal取值的时候也与当前线程有关*/
+            int data = local.get();
+            System.out.println("A from " + Thread.currentThread().getName()
+                    + " get data :" + data);
+        }
+    }
+
+    static class ThreadB {
+        public void getData() {
+            int data = local.get();
+            System.out.println("B from " + Thread.currentThread().getName()
+                    + " get data :" + data);
+        }
+    }
+}
+这种操作实际上在日常开发中就有接触，例如我们使用JDBC连接数据库，
+如果所有操作数据库的类拿的都是同一个Connection，事务开始和结束都是在每个类
+各自的线程中执行的，如果有一个线程刚刚开始添加数据，然后准备再删除一些数据的时候，
+另外一个线程的事务做了commit操作，这就有可能导致第一个线程的事务也被Commit。
+
+而使用了类似上面的线程数据共享机制，每一个线程都有其独立的，不与其他线程混杂在一起
+的独立数据，就可以保证线程正常运行。
+5.	多线程共享数据的方式：
+①如果每个线程执行的代码相同，可以使用同一个Runnable对象，这个Runnable对象中有那个共享数据。例如买票系统。
+public class TicketSellDemo {
+    private static int ticket = 100;
+
+    public static void main(String[] args) {
+        TicketSale sale = new TicketSale(ticket);
+        new Thread(sale).start();
+        new Thread(sale).start();
+
+    }
+
+    static class TicketSale implements Runnable {
+        private static int tickets;
+
+        public TicketSale(int tickets) {
+            this.tickets = tickets;
+        }
+         /*同步方法，写在run方法外面被调用*/
+        private synchronized void sellTicket() {
+            if (tickets > 0) {
+                System.out.println(Thread.currentThread().getName() + " is selling the " + (tickets--) + "th ticket");
+            }
+        }
+@Override
+        public void run() {
+            while (true) {
+                try {
+                    /*模仿网络延迟，必须要考虑的*/
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                sellTicket();
+            }
+        }
+    }
+}
+
+②如果每个线程执行的代码不同，这时候就需要不同的Runnable对象完成不同的操作。例如，设计四个线程，其中两个线程每次对j增加1，另外两个线程对j每次减1。
+public class MultiThreadShareData {
+    private static int data = 10;
+
+    public static void main(String[] args) {
+        MutilRunableA mutilRunableA = new MutilRunableA(data);
+        MutilRunableB mutilRunableB = new MutilRunableB(data);
+        /*for循环真的可以模拟多个线程，例如本次模拟出2*2个线程
+        * 可以通过Thread.currentThread().getName()判断*/
+       /* Thread-0  current data 11
+        Thread-3  current data 9
+        Thread-2  current data 12
+        Thread-1  current data 8*/
+        for (int i = 0; i < 2; i++) {
+            new Thread(mutilRunableA).start();
+            new Thread(mutilRunableB).start();
+        }
+    }
+
+    static class MutilRunableA implements Runnable {
+        private int data;
+
+        public MutilRunableA(int data) {
+      this.data = data;
+        }
+
+        public synchronized void incrData() {
+            data++;
+            System.out.println(Thread.currentThread().getName() + "  current data " + data);
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                incrData();
+            }
+        }
+    }
+
+    static class MutilRunableB implements Runnable {
+        private int data;
+
+        public MutilRunableB(int data) {
+            this.data = data;
+        }
+
+        public synchronized void decrData() {
+            data--;
+            System.out.println(Thread.currentThread().getName() + "  current data " + data);
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+       e.printStackTrace();
+                }
+                decrData();
+            }
+        }
+    }
+}
+6.	多线程与并发库高级应用---线程池
+
+①为什么需要线程池？
+当有许多请求需要处理时，倘若只有一个线程，这会让后面的请求等待很久。这样就需要线程池，有请求过来了就到线程池取出一条线程去处理它，处理完成就把它收回到线程池里面。
+②线程池的创建方式
+1>创建固定大小的线程池
+ExcutorService threadPool=Excutors.newFixedThreadPool(3);
+创建固定大小的线程池，线程池里有3个线程可以同时服务
+2>创建缓存线程池
+ExcutorService threadPool=Excutors.newCachedThreadPool();
+缓存线程池里的线程数是动态变化的，当所有线程处于服务状态时，还有需要被服务的任务，自动增加一个线程进行服务。当执行任务完毕，线程处于空闲一段时间，
+自动增加一个线程为其服务。
+3>创建单一线程池
+创建只有一个线程的线程池，当这个线程挂掉时，可以自动生成一个线程来代替。
+案例：
+public class ThreadPoolDemo {
+
+    public static void main(String[] args) {
+        ExecutorService threadPool = Executors.newFixedThreadPool(3);
+        /*输出结果：pool-1-thread-2 is dealing task of  7
+         pool-1-thread-2 is dealing task of  7
+         pool-1-thread-2 is dealing task of  7
+         pool-1-thread-2 is dealing task of  8
+         pool-1-thread-2 is dealing task of  8
+         其中，pool-1-thread-3代表有三个线程，执行10个任务*/
+        for (int i = 0; i < 10; i++) {
+            final int task = i;
+            threadPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    for (int j = 0; j < 5; j++) {
+System.out.println(Thread.currentThread().getName() + " is dealing task of  " + task);
+                    }
+                }
+            });
+        }
+        /*上述代码执行完毕后，程序没有结束。因为池子中有三个线程存在，所以不会结束*/
+        threadPool.shutdown();/*当线程池中的线程执行完所有任务，所有线程处于空闲状态时，干掉所有线程，程序自动结束*/
+        //threadPool.shutdownNow();  //立即把池子中所有线程干掉，无论任务是否干完
+    }
+}
+Little knowledge:关于线程池的讲解
+首先介绍在TCP服务器编程模型的原理，每一个客户端链接用一个单独的线程为之服务。当于客户端的会话结束时，线程也就结束了，即每来一个客户端连接，服务器端就要创建一个新线程。
+如果访问服务器的客户端很多，那么服务器要不断的创建和销毁线程，影响性能。
+解决：首先创建一些线程，它们的集合称为线程池，当服务器接收到一个客户端请求后，就从线程池取出一个空闲的线程为之服务。
+在线程池的编程模式下，任务是提交给整个线程池而不是直接交给某个线程。
+7.	Callable和Future
+Callable用于产生结果，Future用于拿到结果。
+Callable类似于Runnable，但是Runnable没有返回值。Callable功能更强大一些，可以返回结果，这个结果又可以被Future拿到。
+
+用ExecutorService提交单个Callable任务：
+/*这是没有CompletionService情况下的提交单个Callable任务*/
+public static void main(String[] args) {
+    ExecutorService threadPool = Executors.newFixedThreadPool(5);
+    *//*注意，threadPool有execute()和submit()方法，其中execute()方法是没有返回值的*//*
+    Future<String> future = threadPool.submit(new Callable<String>() {
+        @Override
+        public String call() throws Exception {
+            return "thank you";
+        }
+    });
+    try {
+    System.out.println(" 得到结果 " + future.get());
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    } catch (ExecutionException e) {
+        e.printStackTrace();
+    }
+    threadPool.shutdown();
+}
+
+/*CompletionService用于提交一组Callable任务*/
+用CompletionService提交一组Callable任务
+public static void main(String[] args) {
+    ExecutorService threadPool = Executors.newFixedThreadPool(10);
+    /*CompletionService里的泛型值要和它管理的Callable方法里的泛型值相同*/
+    CompletionService<Integer> completionService = new ExecutorCompletionService<Integer>(threadPool);
+   /*创建10个任务*/
+   for (int i=0;i<10;i++){
+       final  int seq=i;
+       /*如此循环下来，CompletionService提交了10个任务*/
+       completionService.submit(new Callable<Integer>() {
+           @Override
+           public Integer call() throws Exception {
+               Thread.sleep(new Random().nextInt(6000));
+               int num=new Random().nextInt(5000);
+               return num;
+           }
+       });
+   }
+
+    //获取结果，哪个结果先返回就先获得
+    for(int i=0;i<10;i++){
+        try {
+            /*take方法返回已经完成Callable任务的Future对象*/
+          Future<Integer> future=completionService.take();
+            System.out.println(" 得到结果  "+future.get());
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            e.printStackTrace();
+  }
+    }
+threadPool.shutdown();
+}
+8.	线程锁技术的使用
+线程锁好比传统线程模型中的synchronized技术，但是比synchronized更加面向对象。两个线程执行的代码片段如果要实现同步互斥的结果，他们必须使用同一个锁对象。锁在操作资源类的方法里。
+public class LockDemo {
+    private static Outputer outputer = new Outputer();
+
+    public static void main(String[] args) throws InterruptedException {
+        ExecutorService threadPool = Executors.newFixedThreadPool(5);
+        CompletionService<String> completionService = new ExecutorCompletionService<String>(threadPool);
+        for (int i = 0; i < 10; i++) {
+            completionService.submit(new Callable<String>() {
+                                         @Override
+                                         public String call() throws Exception {
+                                             Thread.sleep(2000);
+                                             return outputer.output("fu  feng song");
+                                             // return "Sherlock holmous";
+                                         }
+                                     }
+            );
+            completionService.submit(new Callable<String>() {
+                                         @Override
+                                         public String call() throws Exception {
+                                             Thread.sleep(2000);
+                                             return outputer.output("liu de hua");
+                                             // return "Sherlock holmous";
+                                         }
+                                     }
+            );
+        }
+      
+        for (int i = 0; i < 20; i++) {
+  try {
+                Future<String> future = completionService.take();
+                System.out.println(" 得到 结果  " + future.get());
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } catch (ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+
+
+        threadPool.shutdown();
+    }
+
+    static class Outputer {
+        /*这里用Lock能起到与synchronized一样的效果
+        * 但是看起来比synchronized6更好理解
+        * */
+        private Lock lock = new ReentrantLock();
+        StringBuffer buffer = new StringBuffer();
+        String seq = "";
+
+        public String output(String content) {
+            lock.lock();
+            try {
+                int len = content.length();
+                for (int i = 0; i < len; i++) {
+                    // System.out.print(content.charAt(i));
+                    buffer.append(content.charAt(i));
+                }
+            } finally {
+                //try起来的原因是万一一个线程进去了然后挂了或者抛异常了，那么这个锁根本没有释放
+                seq = new String(buffer);
+                buffer.setLength(0);//StringBuffer的清空方法
+                lock.unlock();
+
+            }
+            return seq;
+        }
+    }
+}
