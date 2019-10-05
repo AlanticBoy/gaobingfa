@@ -1,0 +1,18 @@
+apiVersion: v1beta1
+kind: ReplicationController
+metadata:
+  name: tomcat-demo
+spec:
+  replicas: 2
+  selector:
+    app: tomcat-leatest
+  template:
+    metadata:
+      labels:
+        app: tomcat-leatest
+  spec:
+    containers:
+      - name: tomcat-leatest
+        image: xx
+        ports:
+        - containerPort: 8080
