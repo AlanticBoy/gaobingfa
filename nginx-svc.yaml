@@ -1,11 +1,11 @@
 apiVersion: v1beta1
 kind: Service
 metadata:
-  name: tomcat-leatest
+  name: nginx-leatest
 spec:
   type:NodePort
   ports:
-    - port: 8080
+    - port: 80
       nodePort: 8090
   selector:
-    app: tomcat-leatest
+    app: nginx-leatest
