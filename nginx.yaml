@@ -5,14 +5,14 @@ metadata:
 spec:
   replicas: 2
   selector:
-    app: tomcat-leatest
+    app: nginx-leatest
   template:
-    metadata:
+    metadata: 
       labels:
-        app: tomcat-leatest
+        app: nginx-leatest
   spec:
     containers:
-      - name: tomcat-leatest
-        image: xx
+      - name: nginx-leatest
+        image: nginx:latest
         ports:
         - containerPort: 8080
